@@ -177,6 +177,17 @@ static bool ARMDebuggerUpdateStackTraceInternal(struct mDebuggerPlatform* d, uin
 	return true;
 }
 
+static inline uint32_t _foldAddress(struct ARMDebugger* debugger, uint32_t address) {
+	return debugger->foldAddress ? debugger->foldAddress(debugger, address) : address;
+}
+
+static void _bloomInsert(struct ARMDebugger* debugger, uint32_t address) {
+	size_t j;
+	for (j = 0; j < 4; ++j) {
+		debugger->bpBloom[j] |= 1ULL << ((address >> (4 * j + 1)) & 0x3F);
+	}
+}
+
 static void _rebuildBpBloom(struct ARMDebugger* debugger) {
 	memset(debugger->bpBloom, 0, sizeof(debugger->bpBloom));
 	size_t i;
@@ -185,10 +196,10 @@ static void _rebuildBpBloom(struct ARMDebugger* debugger) {
 		if (breakpoint->d.disabled) {
 			continue;
 		}
-		uint32_t address = breakpoint->d.address;
-		size_t j;
-		for (j = 0; j < 4; ++j) {
-			debugger->bpBloom[j] |= 1ULL << ((address >> (4 * j + 1)) & 0x3F);
+		// A word bp seeds both halfwords; the pc the exact-address bloom sees is always one of them
+		_bloomInsert(debugger, _foldAddress(debugger, breakpoint->d.address));
+		if (breakpoint->d.addressHi > breakpoint->d.address) {
+			_bloomInsert(debugger, _foldAddress(debugger, breakpoint->d.addressHi));
 		}
 	}
 }
@@ -225,13 +236,18 @@ static void ARMDebuggerCheckBreakpoints(struct mDebuggerPlatform* d) {
 	if (debugger->stackTraceMode != STACK_TRACE_DISABLED && ARMDebuggerUpdateStackTraceInternal(d, pc)) {
 		return;
 	}
-	if (ARMDebugBreakpointListSize(&debugger->breakpoints) > 3 && !_checkBpBloom(debugger, pc)) {
+	uint32_t foldedPc = _foldAddress(debugger, pc);
+	if (ARMDebugBreakpointListSize(&debugger->breakpoints) > 3 && !_checkBpBloom(debugger, foldedPc)) {
 		return;
 	}
 	size_t i;
 	for (i = 0; i < ARMDebugBreakpointListSize(&debugger->breakpoints); ++i) {
 		struct ARMDebugBreakpoint* breakpoint = ARMDebugBreakpointListGetPointer(&debugger->breakpoints, i);
-		if (breakpoint->d.address != pc) {
+		uint32_t mask = ~(uint32_t) 0;
+		if (mBreakpointIsInstructionWord(&breakpoint->d)) {
+			mask = ~(uint32_t) (M_BREAKPOINT_INSTRUCTION_WORD - 1);
+		}
+		if ((foldedPc & mask) != (_foldAddress(debugger, breakpoint->d.address) & mask)) {
 			continue;
 		}
 		if (breakpoint->d.disabled) {
@@ -245,7 +261,7 @@ static void ARMDebuggerCheckBreakpoints(struct mDebuggerPlatform* d) {
 			}
 		}
 		struct mDebuggerEntryInfo info = {
-			.address = breakpoint->d.address,
+			.address = pc,
 			.type.bp.breakType = BREAKPOINT_HARDWARE,
 			.pointId = breakpoint->d.id,
 			.target = TableLookup(&d->p->pointOwner, breakpoint->d.id)
@@ -299,6 +315,8 @@ struct mDebuggerPlatform* ARMDebuggerPlatformCreate(void) {
 	platform->setStackTraceMode = ARMDebuggerSetStackTraceMode;
 	platform->updateStackTrace = ARMDebuggerUpdateStackTrace;
 	platform->nextInstructionInfo = ARMDebuggerNextInstructionInfo;
+	// The struct is malloc'd, not zeroed; unset until a platform installs a hook
+	((struct ARMDebugger*) platform)->foldAddress = 0;
 	return platform;
 }
 
@@ -308,9 +326,11 @@ void ARMDebuggerInit(void* cpu, struct mDebuggerPlatform* platform) {
 	debugger->originalMemory = debugger->cpu->memory;
 	debugger->nextId = 1;
 	debugger->stackTraceMode = STACK_TRACE_DISABLED;
+	// foldAddress is not reset here: the platform installs it before this init runs
 	ARMDebugBreakpointListInit(&debugger->breakpoints, 0);
 	ARMDebugBreakpointListInit(&debugger->swBreakpoints, 0);
 	mWatchpointListInit(&debugger->watchpoints, 0);
+	_rebuildBpBloom(debugger);
 	struct mStackTrace* stack = &platform->p->stackTrace;
 	mStackTraceInit(stack, sizeof(struct ARMRegisterFile));
 	stack->formatRegisters = ARMDebuggerFrameFormatRegisters;
@@ -405,6 +425,13 @@ static ssize_t ARMDebuggerSetBreakpoint(struct mDebuggerPlatform* d, struct mDeb
 	++debugger->nextId;
 	breakpoint->d = *info;
 	breakpoint->d.address &= ~1; // Clear Thumb bit since it's not part of a valid address
+	if (breakpoint->d.addressHi <= breakpoint->d.address) {
+		breakpoint->d.addressHi = breakpoint->d.address;
+	} else {
+		// End at +2, the word's last halfword base, or mBreakpointIsInstructionWord no longer holds
+		breakpoint->d.address &= ~(M_BREAKPOINT_INSTRUCTION_WORD - 1);
+		breakpoint->d.addressHi = breakpoint->d.address + M_BREAKPOINT_INSTRUCTION_WORD - 2;
+	}
 	breakpoint->d.id = id;
 	TableInsert(&debugger->d.p->pointOwner, id, owner);
 	_rebuildBpBloom(debugger);
@@ -424,10 +451,10 @@ static bool ARMDebuggerClearBreakpoint(struct mDebuggerPlatform* d, ssize_t id) 
 		if (ARMDebugBreakpointListGetPointer(breakpoints, i)->d.id == id) {
 			_destroyBreakpoint(debugger->d.p, ARMDebugBreakpointListGetPointer(breakpoints, i));
 			ARMDebugBreakpointListShift(breakpoints, i, 1);
+			_rebuildBpBloom(debugger);
 			return true;
 		}
 	}
-	_rebuildBpBloom(debugger);
 
 	struct ARMDebugBreakpointList* swBreakpoints = &debugger->swBreakpoints;
 	if (debugger->clearSoftwareBreakpoint) {
@@ -463,10 +490,11 @@ static bool ARMDebuggerToggleBreakpoint(struct mDebuggerPlatform* d, ssize_t id,
 		struct ARMDebugBreakpoint* breakpoint = ARMDebugBreakpointListGetPointer(breakpoints, i);
 		if (breakpoint->d.id == id) {
 			breakpoint->d.disabled = !status;
+			// Keep bpBloom in sync with the enabled set
+			_rebuildBpBloom(debugger);
 			return true;
 		}
 	}
-	_rebuildBpBloom(debugger);
 
 	struct ARMDebugBreakpointList* swBreakpoints = &debugger->swBreakpoints;
 	for (i = 0; i < ARMDebugBreakpointListSize(swBreakpoints); ++i) {
@@ -493,22 +521,26 @@ static void ARMDebuggerListBreakpoints(struct mDebuggerPlatform* d, struct mDebu
 	mBreakpointListClear(list);
 	size_t i, s;
 	for (i = 0, s = 0; i < ARMDebugBreakpointListSize(&debugger->breakpoints) || s < ARMDebugBreakpointListSize(&debugger->swBreakpoints);) {
-		struct ARMDebugBreakpoint* hw = NULL;
-		struct ARMDebugBreakpoint* sw = NULL;
-		if (i < ARMDebugBreakpointListSize(&debugger->breakpoints)) {
+		struct ARMDebugBreakpoint* hw = 0;
+		struct ARMDebugBreakpoint* sw = 0;
+		while (i < ARMDebugBreakpointListSize(&debugger->breakpoints)) {
 			hw = ARMDebugBreakpointListGetPointer(&debugger->breakpoints, i);
-			if (owner && TableLookup(&debugger->d.p->pointOwner, hw->d.id) != owner) {
-				hw = NULL;
+			if (!owner || TableLookup(&debugger->d.p->pointOwner, hw->d.id) == owner) {
+				break;
 			}
+			hw = 0;
+			++i;
 		}
-		if (s < ARMDebugBreakpointListSize(&debugger->swBreakpoints)) {
+		while (s < ARMDebugBreakpointListSize(&debugger->swBreakpoints)) {
 			sw = ARMDebugBreakpointListGetPointer(&debugger->swBreakpoints, s);
-			if (owner && TableLookup(&debugger->d.p->pointOwner, sw->d.id) != owner) {
-				sw = NULL;
+			if (!owner || TableLookup(&debugger->d.p->pointOwner, sw->d.id) == owner) {
+				break;
 			}
+			sw = 0;
+			++s;
 		}
 		if (!hw && !sw) {
-			continue;
+			break;
 		}
 
 		struct mBreakpoint* b = mBreakpointListAppend(list);

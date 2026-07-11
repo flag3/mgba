@@ -130,12 +130,20 @@ struct mDebuggerEntryInfo {
 struct mBreakpoint {
 	ssize_t id;
 	uint32_t address;
+	uint32_t addressHi; // Inclusive span end; <= address (or 0) is single-address, longer spans normalize to one instruction word
 	int segment;
 	enum mBreakpointType type;
 	struct ParseTree* condition;
 	bool disabled;
 	bool isTemporary;
 };
+
+// An instruction-word breakpoint covers both Thumb halfwords, matched at 4-byte granularity
+#define M_BREAKPOINT_INSTRUCTION_WORD 4
+
+static inline bool mBreakpointIsInstructionWord(const struct mBreakpoint* bp) {
+	return bp->addressHi > bp->address && bp->addressHi - bp->address < M_BREAKPOINT_INSTRUCTION_WORD;
+}
 
 struct mWatchpoint {
 	ssize_t id;
