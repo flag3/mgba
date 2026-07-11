@@ -43,6 +43,9 @@ struct ARMDebugger {
 
 	bool (*setSoftwareBreakpoint)(struct ARMDebugger*, uint32_t address, enum ExecutionMode mode, uint32_t* opcode);
 	void (*clearSoftwareBreakpoint)(struct ARMDebugger*, const struct ARMDebugBreakpoint*);
+
+	// Optional mirror-canonicalization hook; breakpoints and PC are folded before matching
+	uint32_t (*foldAddress)(struct ARMDebugger*, uint32_t address);
 };
 
 struct mDebuggerPlatform* ARMDebuggerPlatformCreate(void);

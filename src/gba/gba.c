@@ -56,6 +56,7 @@ static void _triggerIRQ(struct mTiming*, void* user, uint32_t cyclesLate);
 #ifdef ENABLE_DEBUGGERS
 static bool _setSoftwareBreakpoint(struct ARMDebugger*, uint32_t address, enum ExecutionMode mode, uint32_t* opcode);
 static void _clearSoftwareBreakpoint(struct ARMDebugger*, const struct ARMDebugBreakpoint*);
+static uint32_t _foldMirroredAddress(struct ARMDebugger*, uint32_t address);
 #endif
 
 #ifdef FIXED_ROM_BUFFER
@@ -364,6 +365,8 @@ void GBAAttachDebugger(struct GBA* gba, struct mDebugger* debugger) {
 	gba->debugger = (struct ARMDebugger*) debugger->platform;
 	gba->debugger->setSoftwareBreakpoint = _setSoftwareBreakpoint;
 	gba->debugger->clearSoftwareBreakpoint = _clearSoftwareBreakpoint;
+	// Install before ARMHotplugAttach so breakpoints set from module init() fold correctly
+	gba->debugger->foldAddress = _foldMirroredAddress;
 	gba->cpu->components[CPU_COMPONENT_DEBUGGER] = &debugger->d;
 	ARMHotplugAttach(gba->cpu, CPU_COMPONENT_DEBUGGER);
 }
@@ -1090,5 +1093,18 @@ static bool _setSoftwareBreakpoint(struct ARMDebugger* debugger, uint32_t addres
 
 static void _clearSoftwareBreakpoint(struct ARMDebugger* debugger, const struct ARMDebugBreakpoint* breakpoint) {
 	GBAClearBreakpoint((struct GBA*) debugger->cpu->master, breakpoint->d.address, breakpoint->sw.mode, breakpoint->sw.opcode);
+}
+
+static uint32_t _foldMirroredAddress(struct ARMDebugger* debugger, uint32_t address) {
+	UNUSED(debugger);
+	// The PC keeps the mirror address; fold EWRAM/IWRAM to the lowest mirror
+	switch (address >> BASE_OFFSET) {
+	case GBA_REGION_EWRAM:
+		return GBA_BASE_EWRAM | (address & (GBA_SIZE_EWRAM - 1));
+	case GBA_REGION_IWRAM:
+		return GBA_BASE_IWRAM | (address & (GBA_SIZE_IWRAM - 1));
+	default:
+		return address;
+	}
 }
 #endif
