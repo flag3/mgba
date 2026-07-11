@@ -34,6 +34,8 @@ class ConfigController;
 class CoreController;
 class CoreManager;
 class DebuggerConsoleController;
+class DebuggerGuiController;
+class DebuggerGuiView;
 class Display;
 class DolphinConnector;
 class FrameView;
@@ -116,6 +118,7 @@ public slots:
 
 #ifdef ENABLE_DEBUGGERS
 	void consoleOpen();
+	void debuggerGuiOpen();
 #endif
 
 #ifdef ENABLE_GDB_STUB
@@ -221,6 +224,8 @@ private:
 	LogView* m_logView;
 #ifdef ENABLE_DEBUGGERS
 	DebuggerConsoleController* m_console = nullptr;
+	DebuggerGuiController* m_debuggerGuiController = nullptr;
+	QPointer<DebuggerGuiView> m_debuggerGuiView;
 #endif
 	LoadSaveState* m_stateWindow = nullptr;
 	WindowBackground* m_screenWidget;

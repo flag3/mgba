@@ -78,6 +78,12 @@ bool convertAddress(const QHostAddress* input, Address* output) {
 	return true;
 }
 
+bool parseHex32(const QString& text, uint32_t* out) {
+	bool ok = false;
+	*out = text.toUInt(&ok, 16);
+	return ok;
+}
+
 QString romFilters(bool includeMvl, mPlatform platform, bool rawOnly) {
 	QStringList filters;
 	QStringList formats;
