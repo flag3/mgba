@@ -35,6 +35,16 @@ QString nicePlatformFormat(mPlatform platform, int validModels = 0);
 
 bool convertAddress(const QHostAddress* input, Address* output);
 
+bool parseHex32(const QString& text, uint32_t* out);
+
+inline QString formatHex32(uint32_t value) {
+	return QStringLiteral("%1").arg(value, 8, 16, QChar('0')).toUpper();
+}
+
+inline QString formatHex16(uint16_t value) {
+	return QStringLiteral("%1").arg(value, 4, 16, QChar('0')).toUpper();
+}
+
 inline void lockAspectRatio(const QSize& ref, QSize& size) {
 	if (size.width() * ref.height() > size.height() * ref.width()) {
 		size.setWidth(size.height() * ref.width() / ref.height());

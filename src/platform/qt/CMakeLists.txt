@@ -268,12 +268,17 @@ endif()
 
 if(ENABLE_DEBUGGERS)
 	list(APPEND SOURCE_FILES
+		BreakpointPanel.cpp
 		DebuggerController.cpp
 		DebuggerConsole.cpp
 		DebuggerConsoleController.cpp
+		DebuggerGuiController.cpp
+		DebuggerGuiView.cpp
+		DisassemblyView.cpp
 		MemoryAccessLogController.cpp
 		MemoryAccessLogModel.cpp
-		MemoryAccessLogView.cpp)
+		MemoryAccessLogView.cpp
+		RegisterPanel.cpp)
 endif()
 
 if(ENABLE_GDB_STUB)

@@ -31,6 +31,8 @@
 #include "CoreController.h"
 #include "DebuggerConsole.h"
 #include "DebuggerConsoleController.h"
+#include "DebuggerGuiController.h"
+#include "DebuggerGuiView.h"
 #include "Display.h"
 #include "DolphinConnector.h"
 #include "CoreController.h"
@@ -657,6 +659,25 @@ void Window::consoleOpen() {
 		m_console->setController(m_controller);
 	}
 	openView(window);
+}
+
+void Window::debuggerGuiOpen() {
+	if (!m_controller) {
+		return;
+	}
+	if (m_debuggerGuiView) {
+		m_debuggerGuiView->show();
+		m_debuggerGuiView->activateWindow();
+		m_debuggerGuiView->raise();
+		return;
+	}
+	if (!m_debuggerGuiController) {
+		m_debuggerGuiController = new DebuggerGuiController(this);
+	}
+	m_debuggerGuiController->setController(m_controller);
+	m_debuggerGuiView = new DebuggerGuiView(m_debuggerGuiController, m_controller);
+	connect(m_controller.get(), &CoreController::stopping, m_debuggerGuiView, &QWidget::close);
+	openView(m_debuggerGuiView);
 }
 #endif
 
@@ -1788,6 +1809,8 @@ void Window::setupMenu(QMenuBar* menubar) {
 	m_actions.addSeparator("tools");
 #ifdef ENABLE_DEBUGGERS
 	m_actions.addAction(tr("Open debugger console..."), "debuggerWindow", this, &Window::consoleOpen, "tools");
+	auto debuggerGui = addGameAction(tr("Open debugger..."), "debuggerGui", this, &Window::debuggerGuiOpen, "tools");
+	m_platformActions.insert(mPLATFORM_GBA, debuggerGui);
 #ifdef ENABLE_GDB_STUB
 	auto gdbWindow = addGameAction(tr("Start &GDB server..."), "gdbWindow", this, &Window::gdbOpen, "tools");
 	m_platformActions.insert(mPLATFORM_GBA, gdbWindow);
@@ -2277,6 +2300,10 @@ void Window::setController(CoreController* controller) {
 #ifdef ENABLE_DEBUGGERS
 	if (m_console) {
 		m_console->setController(m_controller);
+	}
+
+	if (m_debuggerGuiController) {
+		m_debuggerGuiController->setController(m_controller);
 	}
 #endif
 
